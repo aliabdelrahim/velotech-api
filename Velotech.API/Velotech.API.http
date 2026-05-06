@@ -1,0 +1,6 @@
+@Velotech.API_HostAddress = http://localhost:5094
+
+GET {{Velotech.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
