@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Velotech.API.Data;
@@ -119,6 +120,53 @@ public class OrdersController : ControllerBase
         };
 
         return CreatedAtAction(nameof(GetOrderById), new { id = order.Id }, details);
+    }
+
+    // GET: api/orders/me
+    // Retourne les commandes du user authentifie (lecture du userId via le claim JWT)
+    [HttpGet("me")]
+    public async Task<ActionResult<List<OrderDetailsDto>>> GetMyOrders()
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !int.TryParse(userIdStr, out var userId))
+            return Unauthorized("User identifier missing from token.");
+
+        var orders = await _db.Orders
+            .Include(o => o.OrderItems)
+            .Include(o => o.Store)
+            .Include(o => o.User)
+            .Where(o => o.UserId == userId)
+            .OrderByDescending(o => o.OrderDate)
+            .ToListAsync();
+
+        var productIds = orders
+            .SelectMany(o => o.OrderItems)
+            .Select(i => i.ProductId)
+            .Distinct()
+            .ToList();
+
+        var products = await _db.Products
+            .Where(p => productIds.Contains(p.Id))
+            .ToDictionaryAsync(p => p.Id);
+
+        var result = orders.Select(order => new OrderDetailsDto
+        {
+            OrderId = order.Id,
+            OrderDate = order.OrderDate,
+            TotalAmount = order.TotalAmount,
+            StoreName = order.Store?.Name ?? "",
+            CustomerName = order.User?.Name ?? "",
+            Items = order.OrderItems.Select(oi => new OrderItemDto
+            {
+                ProductName = products.TryGetValue(oi.ProductId, out var p)
+                    ? p.Name ?? $"Product #{oi.ProductId}"
+                    : $"Product #{oi.ProductId}",
+                Quantity = oi.Quantity,
+                UnitPrice = oi.UnitPrice
+            }).ToList()
+        }).ToList();
+
+        return Ok(result);
     }
 
     // GET: api/orders/store/1

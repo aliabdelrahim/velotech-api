@@ -4,3 +4,9 @@ obj/
 *.user
 *.suo
 appsettings.Development.json
+
+# Livrables TFE - conserves localement, pas sur GitHub
+Documentation/
+
+# Scripts ponctuels (auto-generes par l'assistant)
+*.ps1
