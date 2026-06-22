@@ -83,6 +83,81 @@ public class AuthController : ControllerBase
         return Ok(token);
     }
 
+    // POST: api/auth/forgot-password
+    // Genere un token de reset et le retourne (en prod : envoye par email).
+    // Reponse identique que l'email existe ou non : empeche l'enumeration.
+    [HttpPost("forgot-password")]
+    public async Task<ActionResult> ForgotPassword(ForgotPasswordDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Email))
+            return BadRequest("Email is required.");
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+        if (user != null)
+        {
+            // Token aleatoire 32 bytes -> base64 url-safe
+            byte[] tokenBytes = RandomNumberGenerator.GetBytes(32);
+            string token = Convert.ToBase64String(tokenBytes)
+                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+            user.PasswordResetToken = HashToken(token);
+            user.PasswordResetExpiresAt = DateTime.UtcNow.AddMinutes(30);
+            await _db.SaveChangesAsync();
+
+            // TODO: en production, envoyer un email avec un lien :
+            //       https://velotech.com/reset-password/{token}
+            //       Pour le dev/TFE, on log le lien en console.
+            Console.WriteLine($"[Velotech] Reset link for {user.Email} : /reset-password/{token}");
+
+            // Le token est retourne EN DEV uniquement pour faciliter les tests.
+            // En production, retirer ce champ.
+            return Ok(new
+            {
+                message = "If the email exists, a reset link has been sent.",
+                devToken = token // a retirer en prod
+            });
+        }
+
+        // Reponse identique meme si l'email n'existe pas (anti-enumeration)
+        return Ok(new { message = "If the email exists, a reset link has been sent." });
+    }
+
+    // POST: api/auth/reset-password
+    [HttpPost("reset-password")]
+    public async Task<ActionResult> ResetPassword(ResetPasswordDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Token) || string.IsNullOrWhiteSpace(dto.NewPassword))
+            return BadRequest("Token and new password are required.");
+        if (dto.NewPassword.Length < 6)
+            return BadRequest("New password must be at least 6 characters.");
+
+        var hashedToken = HashToken(dto.Token);
+
+        var user = await _db.Users
+            .FirstOrDefaultAsync(u =>
+                u.PasswordResetToken == hashedToken &&
+                u.PasswordResetExpiresAt != null &&
+                u.PasswordResetExpiresAt > DateTime.UtcNow);
+
+        if (user == null)
+            return BadRequest("Invalid or expired token.");
+
+        user.PasswordHash = HashPassword(dto.NewPassword);
+        user.PasswordResetToken = null;
+        user.PasswordResetExpiresAt = null;
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Password has been reset successfully." });
+    }
+
+    // Hash du token (SHA-256) - on ne stocke jamais le token en clair
+    private static string HashToken(string token)
+    {
+        using var sha = SHA256.Create();
+        byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(token));
+        return Convert.ToBase64String(hash);
+    }
+
     // --- JWT helpers ---
     private AuthResultDto CreateJwtToken(User user)
     {

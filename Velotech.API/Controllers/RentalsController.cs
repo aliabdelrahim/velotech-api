@@ -1,5 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
@@ -15,6 +17,40 @@ public class RentalsController : ControllerBase
     public RentalsController(VelotechDbContext db)
     {
         _db = db;
+    }
+
+    // GET: api/rentals/me
+    [Authorize]
+    [HttpGet("me")]
+    public async Task<ActionResult<List<RentalDetailsDto>>> GetMyRentals()
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !int.TryParse(userIdStr, out var userId))
+            return Unauthorized("User identifier missing from token.");
+
+        var list = await _db.Rentals
+            .Include(r => r.User)
+            .Include(r => r.Store)
+            .Include(r => r.Product)
+            .Where(r => r.UserId == userId)
+            .OrderByDescending(r => r.StartDate)
+            .Select(r => new RentalDetailsDto
+            {
+                RentalId = r.Id,
+                UserId = r.UserId,
+                UserName = r.User != null ? r.User.Name ?? "" : "",
+                StoreId = r.StoreId,
+                StoreName = r.Store != null ? r.Store.Name ?? "" : "",
+                ProductId = r.ProductId,
+                ProductName = r.Product != null ? r.Product.Name ?? "" : "",
+                StartDate = r.StartDate,
+                EndDate = r.EndDate,
+                TotalPrice = r.TotalPrice,
+                Status = r.Status ?? ""
+            })
+            .ToListAsync();
+
+        return Ok(list);
     }
 
     // POST: api/rentals
