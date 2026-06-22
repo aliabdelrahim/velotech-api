@@ -1,5 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
@@ -15,6 +17,40 @@ public class AppointmentsController : ControllerBase
     public AppointmentsController(VelotechDbContext db)
     {
         _db = db;
+    }
+
+    // GET: api/appointments/me
+    [Authorize]
+    [HttpGet("me")]
+    public async Task<ActionResult<List<AppointmentDetailsDto>>> GetMyAppointments()
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !int.TryParse(userIdStr, out var userId))
+            return Unauthorized("User identifier missing from token.");
+
+        var list = await _db.Appointments
+            .Include(a => a.User)
+            .Include(a => a.Store)
+            .Include(a => a.Product)
+            .Where(a => a.UserId == userId)
+            .OrderByDescending(a => a.ScheduledAt)
+            .Select(a => new AppointmentDetailsDto
+            {
+                AppointmentId = a.Id,
+                UserId = a.UserId,
+                UserName = a.User != null ? a.User.Name ?? "" : "",
+                StoreId = a.StoreId,
+                StoreName = a.Store != null ? a.Store.Name ?? "" : "",
+                ProductId = a.ProductId,
+                ProductName = a.Product != null ? a.Product.Name ?? "" : "",
+                ServiceType = a.ServiceType ?? "",
+                ScheduledAt = a.ScheduledAt,
+                Status = a.Status ?? "",
+                Notes = a.Notes
+            })
+            .ToListAsync();
+
+        return Ok(list);
     }
 
     // POST: api/appointments
