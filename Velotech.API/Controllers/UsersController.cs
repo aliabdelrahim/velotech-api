@@ -107,6 +107,57 @@ public class UsersController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// Desinscription : l'utilisateur authentifie supprime son propre compte.
+    ///
+    /// Pattern de soft delete + anonymisation RGPD :
+    ///   1. Verifier le mot de passe (anti-detournement)
+    ///   2. Anonymiser les PII (Name, Email) pour que plus aucune donnee
+    ///      personnelle ne subsiste en base
+    ///   3. Marquer le compte comme supprime (IsDeleted = true, IsActive = false)
+    ///
+    /// L'historique des commandes, locations et paiements est conserve pour
+    /// les obligations comptables et fiscales (10 ans en Belgique), mais sans
+    /// aucune donnee identifiante rattachee.
+    /// </summary>
+    [Authorize]
+    [HttpDelete("me")]
+    public async Task<ActionResult> DeleteMyAccount(DeleteAccountDto dto)
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdStr) || !int.TryParse(userIdStr, out var userId))
+            return Unauthorized("User identifier missing from token.");
+
+        if (string.IsNullOrWhiteSpace(dto.Password))
+            return BadRequest("Password confirmation is required to delete your account.");
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null) return NotFound();
+
+        // Verification du mot de passe (anti-detournement de compte)
+        if (string.IsNullOrWhiteSpace(user.PasswordHash) ||
+            !VerifyPassword(dto.Password, user.PasswordHash))
+        {
+            return BadRequest("Incorrect password.");
+        }
+
+        // Anonymisation des donnees personnelles (RGPD "droit a l'oubli")
+        user.Name = "Compte supprime";
+        user.Email = $"deleted-{user.Id}@velotech.local";
+        user.PasswordHash = null;
+        user.PasswordResetToken = null;
+        user.PasswordResetExpiresAt = null;
+
+        // Marquage soft delete
+        user.IsActive = false;
+        user.IsDeleted = true;
+        user.DeletedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Account deleted successfully." });
+    }
+
     // --- Password hashing (PBKDF2) - meme format que AuthController ---
     private static string HashPassword(string password)
     {

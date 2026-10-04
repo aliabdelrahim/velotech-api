@@ -10,4 +10,5 @@ public class ProductCatalogDto
     public bool IsRentable { get; set; }
     public int StockSale { get; set; }
     public int StockRental { get; set; }
+    public string? ImageUrls { get; set; }
 }

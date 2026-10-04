@@ -66,9 +66,8 @@ public class AppointmentsController : ControllerBase
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.UserId);
         if (user == null) return NotFound($"User {dto.UserId} not found.");
 
-        // Règle métier : user appartient au magasin
-        if (user.StoreId != dto.StoreId)
-            return BadRequest("User does not belong to this store.");
+        // Note : un client peut prendre rendez-vous dans n'importe quel magasin.
+        // Aucune contrainte user.StoreId ici (celle-ci ne concerne que le staff).
 
         Product? product = null;
         if (dto.ProductId.HasValue)

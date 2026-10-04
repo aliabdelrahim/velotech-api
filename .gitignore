@@ -10,3 +10,9 @@ Documentation/
 
 # Scripts ponctuels (auto-generes par l'assistant)
 *.ps1
+
+# Documents personnels defense
+Velotech_Presentation.pptx
+Velotech_Speech_Defense.docx
+*.docx
+*.pptx
