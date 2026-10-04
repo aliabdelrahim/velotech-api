@@ -71,6 +71,12 @@ public class AuthController : ControllerBase
 
         if (user == null) return Unauthorized("Invalid credentials.");
 
+        // Les comptes supprimes (desinscription) ou desactives ne peuvent plus se connecter.
+        // On retourne le meme message que pour "mauvais identifiants" pour ne pas
+        // divulguer l'existence du compte.
+        if (user.IsDeleted || !user.IsActive)
+            return Unauthorized("Invalid credentials.");
+
         // Si tu as des anciens users en DB sans PasswordHash
         if (string.IsNullOrWhiteSpace(user.PasswordHash))
             return Unauthorized("User has no password set. Please register a new user.");

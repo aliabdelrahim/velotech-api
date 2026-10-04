@@ -53,7 +53,8 @@ public class ProductsController : ControllerBase
             Type = type,
             PriceSale = dto.PriceSale,
             PriceRental = dto.PriceRental,
-            IsRentable = dto.IsRentable
+            IsRentable = dto.IsRentable,
+            ImageUrls = string.IsNullOrWhiteSpace(dto.ImageUrls) ? null : dto.ImageUrls.Trim()
         };
 
         _db.Products.Add(product);
@@ -66,7 +67,8 @@ public class ProductsController : ControllerBase
             Type = product.Type ?? "",
             PriceSale = product.PriceSale,
             PriceRental = product.PriceRental,
-            IsRentable = product.IsRentable
+            IsRentable = product.IsRentable,
+            ImageUrls = product.ImageUrls
         };
 
         return CreatedAtAction(nameof(GetProductById), new { id = product.Id }, result);
@@ -86,7 +88,8 @@ public class ProductsController : ControllerBase
             Type = product.Type ?? "",
             PriceSale = product.PriceSale,
             PriceRental = product.PriceRental,
-            IsRentable = product.IsRentable
+            IsRentable = product.IsRentable,
+            ImageUrls = product.ImageUrls
         });
     }
 
@@ -108,7 +111,8 @@ public class ProductsController : ControllerBase
                 Type = p.Type ?? "",
                 PriceSale = p.PriceSale,
                 PriceRental = p.PriceRental,
-                IsRentable = p.IsRentable
+                IsRentable = p.IsRentable,
+                ImageUrls = p.ImageUrls
             })
             .ToListAsync();
 
@@ -154,6 +158,7 @@ public class ProductsController : ControllerBase
         product.PriceSale = dto.PriceSale;
         product.PriceRental = dto.PriceRental;
         product.IsRentable = dto.IsRentable;
+        product.ImageUrls = string.IsNullOrWhiteSpace(dto.ImageUrls) ? null : dto.ImageUrls.Trim();
 
         await _db.SaveChangesAsync();
 
@@ -164,7 +169,8 @@ public class ProductsController : ControllerBase
             Type = product.Type ?? "",
             PriceSale = product.PriceSale,
             PriceRental = product.PriceRental,
-            IsRentable = product.IsRentable
+            IsRentable = product.IsRentable,
+            ImageUrls = product.ImageUrls
         });
     }
 
@@ -176,7 +182,34 @@ public class ProductsController : ControllerBase
         if (product == null)
             return NotFound();
 
+        // Soft delete : grace a l'override SaveChanges dans VelotechDbContext,
+        // ce Remove() ne supprime pas physiquement la ligne mais la marque
+        // comme supprimee (IsDeleted = true, DeletedAt = now). Les commandes
+        // et locations historiques qui pointent vers ce produit continuent
+        // de fonctionner. Utiliser le endpoint POST /{id}/restore pour annuler.
         _db.Products.Remove(product);
+        await _db.SaveChangesAsync();
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Restaure un produit precedemment soft-deleted.
+    /// Utilise IgnoreQueryFilters() pour voir les produits supprimes
+    /// (le Global Query Filter les masque par defaut).
+    /// </summary>
+    [HttpPost("{id:int}/restore")]
+    public async Task<ActionResult> RestoreProduct(int id)
+    {
+        var product = await _db.Products
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.Id == id);
+
+        if (product == null) return NotFound();
+        if (!product.IsDeleted) return BadRequest("Product is not deleted.");
+
+        product.IsDeleted = false;
+        product.DeletedAt = null;
         await _db.SaveChangesAsync();
 
         return NoContent();

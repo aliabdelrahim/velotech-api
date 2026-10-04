@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Velotech.API.Models;
 
 namespace Velotech.API.Data
@@ -27,6 +28,13 @@ namespace Velotech.API.Data
             // clé composite StoreProducts
             modelBuilder.Entity<StoreProduct>()
                 .HasKey(sp => new { sp.StoreId, sp.ProductId });
+
+            // ===== Global Query Filters (soft delete) =====
+            // Toute requete sur ces entites exclut automatiquement les lignes
+            // marquees IsDeleted = true. Pour les inclure (ex: back-office),
+            // utiliser .IgnoreQueryFilters() sur la requete.
+            modelBuilder.Entity<Product>().HasQueryFilter(p => !p.IsDeleted);
+            modelBuilder.Entity<Store>().HasQueryFilter(s => !s.IsDeleted);
 
             // ✅ FIX SQL Server: éviter multiple cascade paths
             modelBuilder.Entity<Order>()
@@ -108,6 +116,39 @@ namespace Velotech.API.Data
                 .HasForeignKey(p => p.UserId)
                 .OnDelete(DeleteBehavior.NoAction);
 
+        }
+
+        /// <summary>
+        /// Intercepte les suppressions physiques pour les transformer en soft
+        /// delete sur les entites qui implementent ISoftDeletable. Les autres
+        /// entites sont supprimees normalement (hard delete).
+        /// </summary>
+        public override int SaveChanges()
+        {
+            ApplySoftDelete();
+            return base.SaveChanges();
+        }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            ApplySoftDelete();
+            return base.SaveChangesAsync(cancellationToken);
+        }
+
+        private void ApplySoftDelete()
+        {
+            var entries = ChangeTracker.Entries()
+                .Where(e => e.Entity is ISoftDeletable && e.State == EntityState.Deleted);
+
+            foreach (EntityEntry entry in entries)
+            {
+                // On annule la suppression physique...
+                entry.State = EntityState.Modified;
+                // ...et on marque l'entite comme supprimee.
+                var entity = (ISoftDeletable)entry.Entity;
+                entity.IsDeleted = true;
+                entity.DeletedAt = DateTime.UtcNow;
+            }
         }
     }
 }

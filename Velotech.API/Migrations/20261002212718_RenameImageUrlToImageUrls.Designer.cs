@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Velotech.API.Data;
 
@@ -11,9 +12,11 @@ using Velotech.API.Data;
 namespace Velotech.API.Migrations
 {
     [DbContext(typeof(VelotechDbContext))]
-    partial class VelotechDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261002212718_RenameImageUrlToImageUrls")]
+    partial class RenameImageUrlToImageUrls
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

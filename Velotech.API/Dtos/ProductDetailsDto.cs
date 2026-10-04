@@ -8,4 +8,5 @@ public class ProductDetailsDto
     public decimal PriceSale { get; set; }
     public decimal? PriceRental { get; set; }
     public bool IsRentable { get; set; }
+    public string? ImageUrls { get; set; }
 }
