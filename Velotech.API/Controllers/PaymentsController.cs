@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
@@ -8,6 +9,7 @@ namespace Velotech.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class PaymentsController : ControllerBase
 {
     private readonly VelotechDbContext _db;
@@ -135,7 +137,8 @@ public class PaymentsController : ControllerBase
         });
     }
 
-    // GET: api/payments?userId=1&type=Order
+    // GET: api/payments?userId=1&type=Order  (back-office : admin only)
+    [Authorize(Roles = "Admin")]
     [HttpGet]
     public async Task<ActionResult<List<PaymentDetailsDto>>> GetPayments([FromQuery] int? userId, [FromQuery] string? type)
     {

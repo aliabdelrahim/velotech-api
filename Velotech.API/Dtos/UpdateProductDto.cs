@@ -1,4 +1,4 @@
-﻿namespace Velotech.API.Dtos;
+namespace Velotech.API.Dtos;
 
 public class UpdateProductDto
 {
@@ -8,4 +8,12 @@ public class UpdateProductDto
     public decimal? PriceRental { get; set; }
     public bool IsRentable { get; set; }
     public string? ImageUrls { get; set; }
+
+    /// <summary>
+    /// Nouvelle liste complete des attributions aux magasins.
+    /// Mode "replace" : les StoreProducts existants pour ce produit
+    /// sont alignes sur cette liste (ajout, modification, suppression).
+    /// Si null, les stocks ne sont PAS modifies (seulement les infos produit).
+    /// </summary>
+    public List<ProductStoreStockDto>? StoreStocks { get; set; }
 }

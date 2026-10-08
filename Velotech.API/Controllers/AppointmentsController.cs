@@ -10,6 +10,7 @@ namespace Velotech.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class AppointmentsController : ControllerBase
 {
     private readonly VelotechDbContext _db;

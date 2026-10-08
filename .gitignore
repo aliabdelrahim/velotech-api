@@ -16,3 +16,8 @@ Velotech_Presentation.pptx
 Velotech_Speech_Defense.docx
 *.docx
 *.pptx
+
+# Archives et dumps
+*.zip
+*.rar
+*.7z

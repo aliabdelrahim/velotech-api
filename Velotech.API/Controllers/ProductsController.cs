@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
@@ -17,7 +18,8 @@ public class ProductsController : ControllerBase
         _db = db;
     }
 
-    // POST: api/products
+    // POST: api/products  (Admin only)
+    [Authorize(Roles = "Admin,Manager")]
     [HttpPost]
     public async Task<ActionResult<ProductDetailsDto>> CreateProduct(CreateProductDto dto)
     {
@@ -60,17 +62,14 @@ public class ProductsController : ControllerBase
         _db.Products.Add(product);
         await _db.SaveChangesAsync();
 
-        var result = new ProductDetailsDto
+        // Attribution aux magasins avec stocks
+        if (dto.StoreStocks != null && dto.StoreStocks.Count > 0)
         {
-            Id = product.Id,
-            Name = product.Name ?? "",
-            Type = product.Type ?? "",
-            PriceSale = product.PriceSale,
-            PriceRental = product.PriceRental,
-            IsRentable = product.IsRentable,
-            ImageUrls = product.ImageUrls
-        };
+            var err = await ApplyStoreStocksAsync(product, dto.StoreStocks);
+            if (err != null) return BadRequest(err);
+        }
 
+        var result = await BuildProductDetailsAsync(product.Id);
         return CreatedAtAction(nameof(GetProductById), new { id = product.Id }, result);
     }
 
@@ -78,19 +77,11 @@ public class ProductsController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<ActionResult<ProductDetailsDto>> GetProductById(int id)
     {
-        var product = await _db.Products.FirstOrDefaultAsync(p => p.Id == id);
-        if (product == null) return NotFound();
+        var exists = await _db.Products.AnyAsync(p => p.Id == id);
+        if (!exists) return NotFound();
 
-        return Ok(new ProductDetailsDto
-        {
-            Id = product.Id,
-            Name = product.Name ?? "",
-            Type = product.Type ?? "",
-            PriceSale = product.PriceSale,
-            PriceRental = product.PriceRental,
-            IsRentable = product.IsRentable,
-            ImageUrls = product.ImageUrls
-        });
+        var dto = await BuildProductDetailsAsync(id);
+        return Ok(dto);
     }
 
     // GET: api/products?type=Bike
@@ -119,7 +110,8 @@ public class ProductsController : ControllerBase
         return Ok(products);
     }
 
-    // PUT: api/products/5
+    // PUT: api/products/5  (Admin only)
+    [Authorize(Roles = "Admin,Manager")]
     [HttpPut("{id:int}")]
     public async Task<ActionResult<ProductDetailsDto>> UpdateProduct(int id, UpdateProductDto dto)
     {
@@ -162,7 +154,39 @@ public class ProductsController : ControllerBase
 
         await _db.SaveChangesAsync();
 
-        return Ok(new ProductDetailsDto
+        // Synchronisation des attributions aux magasins (mode "replace")
+        if (dto.StoreStocks != null)
+        {
+            var err = await ApplyStoreStocksAsync(product, dto.StoreStocks);
+            if (err != null) return BadRequest(err);
+        }
+
+        var result = await BuildProductDetailsAsync(product.Id);
+        return Ok(result);
+    }
+
+    // ----- Helpers -----
+
+    /// <summary>
+    /// Reconstruit un ProductDetailsDto complet avec la liste des stocks par magasin.
+    /// </summary>
+    private async Task<ProductDetailsDto> BuildProductDetailsAsync(int productId)
+    {
+        var product = await _db.Products.FirstAsync(p => p.Id == productId);
+
+        var storeStocks = await _db.StoreProducts
+            .Where(sp => sp.ProductId == productId)
+            .Include(sp => sp.Store)
+            .Select(sp => new ProductStoreStockDto
+            {
+                StoreId = sp.StoreId,
+                StoreName = sp.Store != null ? sp.Store.Name : null,
+                StockSale = sp.StockSale,
+                StockRental = sp.StockRental
+            })
+            .ToListAsync();
+
+        return new ProductDetailsDto
         {
             Id = product.Id,
             Name = product.Name ?? "",
@@ -170,10 +194,77 @@ public class ProductsController : ControllerBase
             PriceSale = product.PriceSale,
             PriceRental = product.PriceRental,
             IsRentable = product.IsRentable,
-            ImageUrls = product.ImageUrls
-        });
+            ImageUrls = product.ImageUrls,
+            StoreStocks = storeStocks
+        };
     }
 
+    /// <summary>
+    /// Applique la liste des stocks fournie en mode "replace" :
+    ///  - ajoute les nouvelles associations (StoreId pas encore present)
+    ///  - met a jour les quantites existantes
+    ///  - supprime les associations qui ne sont plus dans la liste
+    /// Valide aussi que les StoreId existent et que StockRental=0 si !IsRentable.
+    /// Retourne un message d'erreur ou null si tout est OK.
+    /// </summary>
+    private async Task<string?> ApplyStoreStocksAsync(Product product, List<ProductStoreStockDto> stocks)
+    {
+        // Validation : StoreIds existants
+        var storeIds = stocks.Select(s => s.StoreId).Distinct().ToList();
+        var existingStoreIds = await _db.Stores
+            .Where(s => storeIds.Contains(s.Id))
+            .Select(s => s.Id)
+            .ToListAsync();
+
+        var missing = storeIds.Except(existingStoreIds).ToList();
+        if (missing.Count > 0)
+            return $"Store(s) not found: {string.Join(", ", missing)}";
+
+        // Validation : stocks >= 0 + coherence rentable
+        foreach (var s in stocks)
+        {
+            if (s.StockSale < 0 || s.StockRental < 0)
+                return "Stock values must be >= 0.";
+            if (!product.IsRentable && s.StockRental > 0)
+                return "StockRental must be 0 for a non-rentable product.";
+        }
+
+        // Recupere les StoreProducts actuels pour ce produit
+        var current = await _db.StoreProducts
+            .Where(sp => sp.ProductId == product.Id)
+            .ToListAsync();
+
+        // 1) Suppression des associations qui ne sont plus dans la liste
+        var newStoreIds = stocks.Select(s => s.StoreId).ToHashSet();
+        var toRemove = current.Where(sp => !newStoreIds.Contains(sp.StoreId)).ToList();
+        _db.StoreProducts.RemoveRange(toRemove);
+
+        // 2) Upsert : update si existe, insert sinon
+        foreach (var s in stocks)
+        {
+            var existing = current.FirstOrDefault(sp => sp.StoreId == s.StoreId);
+            if (existing != null)
+            {
+                existing.StockSale = s.StockSale;
+                existing.StockRental = s.StockRental;
+            }
+            else
+            {
+                _db.StoreProducts.Add(new Models.StoreProduct
+                {
+                    StoreId = s.StoreId,
+                    ProductId = product.Id,
+                    StockSale = s.StockSale,
+                    StockRental = s.StockRental
+                });
+            }
+        }
+
+        await _db.SaveChangesAsync();
+        return null;
+    }
+
+    [Authorize(Roles = "Admin")]
     [HttpDelete("{id:int}")]
     public async Task<ActionResult> DeleteProduct(int id)
     {
@@ -198,6 +289,7 @@ public class ProductsController : ControllerBase
     /// Utilise IgnoreQueryFilters() pour voir les produits supprimes
     /// (le Global Query Filter les masque par defaut).
     /// </summary>
+    [Authorize(Roles = "Admin")]
     [HttpPost("{id:int}/restore")]
     public async Task<ActionResult> RestoreProduct(int id)
     {
