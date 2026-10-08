@@ -11,6 +11,7 @@ namespace Velotech.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize(Roles = "Admin")]
 public class UsersController : ControllerBase
 {
     private readonly VelotechDbContext _db;
@@ -21,7 +22,7 @@ public class UsersController : ControllerBase
     }
 
     // GET: api/users/me
-    [Authorize]
+    [Authorize(Roles = "Admin,Manager,Tech,Client")]
     [HttpGet("me")]
     public async Task<ActionResult<UserDetailsDto>> GetMe()
     {
@@ -49,7 +50,7 @@ public class UsersController : ControllerBase
     }
 
     // PUT: api/users/me
-    [Authorize]
+    [Authorize(Roles = "Admin,Manager,Tech,Client")]
     [HttpPut("me")]
     public async Task<ActionResult<UserDetailsDto>> UpdateMe(UpdateProfileDto dto)
     {
@@ -120,7 +121,7 @@ public class UsersController : ControllerBase
     /// les obligations comptables et fiscales (10 ans en Belgique), mais sans
     /// aucune donnee identifiante rattachee.
     /// </summary>
-    [Authorize]
+    [Authorize(Roles = "Admin,Manager,Tech,Client")]
     [HttpDelete("me")]
     public async Task<ActionResult> DeleteMyAccount(DeleteAccountDto dto)
     {

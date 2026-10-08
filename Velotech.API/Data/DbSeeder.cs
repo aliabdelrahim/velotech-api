@@ -12,18 +12,23 @@ public static class DbSeeder
     {
         await db.Database.MigrateAsync();
 
-        // ===== STORE =====
+        // ===== STORES (3 magasins pour la demo multi-site) =====
+        // Un magasin par region linguistique majeure de Belgique :
+        //  - Ixelles  : coeur de Bruxelles (FR/NL)
+        //  - Louvain  : Flandre, universite (NL)
+        //  - Anvers   : plus grand port, Nord du pays (NL)
         if (!await db.Stores.AnyAsync())
         {
-            db.Stores.Add(new Store
-            {
-                Name = "Velotech Ixelles",
-                Address = "Ixelles, Bruxelles"
-            });
+            db.Stores.AddRange(
+                new Store { Name = "Velotech Ixelles", Address = "Chaussee d'Ixelles 150, 1050 Bruxelles" },
+                new Store { Name = "Velotech Louvain", Address = "Bondgenotenlaan 42, 3000 Leuven" },
+                new Store { Name = "Velotech Anvers",  Address = "Meir 78, 2000 Antwerpen" }
+            );
             await db.SaveChangesAsync();
         }
 
-        var store = await db.Stores.FirstAsync();
+        var stores = await db.Stores.OrderBy(s => s.Id).ToListAsync();
+        var store = stores[0]; // Ixelles reste le "magasin principal" pour l'admin
 
         // ===== PRODUCTS =====
         if (!await db.Products.AnyAsync())
@@ -59,13 +64,34 @@ public static class DbSeeder
             db.Products.AddRange(products);
             await db.SaveChangesAsync();
 
+            // ===== STOCKS PAR MAGASIN =====
+            // Volontairement varies pour que chaque magasin ait un catalogue different :
+            //  - Ixelles : grand magasin, stock complet
+            //  - Louvain : stock moyen, pas de VTT
+            //  - Anvers  : specialise route + accessoires, pas de VTT
+            var ixelles = stores[0];
+            var louvain = stores[1];
+            var anvers  = stores[2];
+
             db.StoreProducts.AddRange(new List<StoreProduct>
-        {
-            new StoreProduct { StoreId = store.Id, ProductId = products[0].Id, StockSale = 5, StockRental = 2 },
-            new StoreProduct { StoreId = store.Id, ProductId = products[1].Id, StockSale = 3, StockRental = 1 },
-            new StoreProduct { StoreId = store.Id, ProductId = products[2].Id, StockSale = 20, StockRental = 0 },
-            new StoreProduct { StoreId = store.Id, ProductId = products[3].Id, StockSale = 15, StockRental = 0 },
-        });
+            {
+                // Vélo route RC120 (disponible partout)
+                new StoreProduct { StoreId = ixelles.Id, ProductId = products[0].Id, StockSale = 5, StockRental = 2 },
+                new StoreProduct { StoreId = louvain.Id, ProductId = products[0].Id, StockSale = 3, StockRental = 1 },
+                new StoreProduct { StoreId = anvers.Id,  ProductId = products[0].Id, StockSale = 4, StockRental = 2 },
+
+                // VTT ST 540 (seulement Ixelles — demo du filtre magasin)
+                new StoreProduct { StoreId = ixelles.Id, ProductId = products[1].Id, StockSale = 3, StockRental = 1 },
+
+                // Casque Urbain (partout)
+                new StoreProduct { StoreId = ixelles.Id, ProductId = products[2].Id, StockSale = 20, StockRental = 0 },
+                new StoreProduct { StoreId = louvain.Id, ProductId = products[2].Id, StockSale = 10, StockRental = 0 },
+                new StoreProduct { StoreId = anvers.Id,  ProductId = products[2].Id, StockSale = 15, StockRental = 0 },
+
+                // Antivol U (Ixelles + Anvers)
+                new StoreProduct { StoreId = ixelles.Id, ProductId = products[3].Id, StockSale = 15, StockRental = 0 },
+                new StoreProduct { StoreId = anvers.Id,  ProductId = products[3].Id, StockSale = 8,  StockRental = 0 },
+            });
 
             await db.SaveChangesAsync();
         }

@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
@@ -8,6 +9,7 @@ namespace Velotech.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize(Roles = "Admin,Manager,Tech")]
 public class RepairsController : ControllerBase
 {
     private readonly VelotechDbContext _db;

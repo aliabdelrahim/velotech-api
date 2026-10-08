@@ -63,10 +63,25 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// CORS :
+//  - Dev : on autorise TOUTES les origines pour eviter les blocages lors
+//    des demos (differents PC, differents ports du front, Swagger, Postman...).
+//    Pas d'AllowCredentials car incompatible avec AllowAnyOrigin.
+//  - Prod : on garde une liste blanche stricte (uniquement l'URL officielle
+//    du front deploye) pour la securite.
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AngularDev", policy =>
-        policy.WithOrigins("http://localhost:4200")
+    options.AddPolicy("DevOpen", policy =>
+        policy.AllowAnyOrigin()
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+    );
+
+    options.AddPolicy("ProdStrict", policy =>
+        policy.WithOrigins(
+                  "https://velotech.be",
+                  "https://www.velotech.be"
+              )
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials()
@@ -90,9 +105,16 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// En dev on NE force PAS la redirection HTTPS : ca evite le probleme ou
+// Swagger (http://localhost:5094) est redirige vers https://localhost:7248
+// et provoque une erreur CORS entre les deux ports.
+// En prod on garde la redirection pour imposer HTTPS.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
-app.UseCors("AngularDev");
+app.UseCors(app.Environment.IsDevelopment() ? "DevOpen" : "ProdStrict");
 
 app.UseAuthentication();
 app.UseAuthorization();
