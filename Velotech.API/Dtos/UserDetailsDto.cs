@@ -1,4 +1,4 @@
-﻿namespace Velotech.API.Dtos;
+namespace Velotech.API.Dtos;
 
 public class UserDetailsDto
 {
@@ -11,4 +11,9 @@ public class UserDetailsDto
 
     public int StoreId { get; set; }
     public string StoreName { get; set; } = "";
+
+    public bool IsDeleted { get; set; }
+
+    /// <summary>Date UTC a laquelle le compte a ete supprime (null si actif).</summary>
+    public DateTime? DeletedAt { get; set; }
 }

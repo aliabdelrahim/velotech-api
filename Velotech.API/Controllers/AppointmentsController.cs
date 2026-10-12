@@ -54,6 +54,61 @@ public class AppointmentsController : ControllerBase
         return Ok(list);
     }
 
+    // GET: api/appointments/to-process  (RDV du magasin du staff qui attendent prise en charge)
+    // Utilise par le technicien pour voir les RDV reparation qui ne sont pas encore
+    // associes a une Repair. Filtre : service = reparation, statut = Confirmed,
+    // pas de Repair deja creee pour ce RDV, et au magasin du staff connecte.
+    [Authorize(Roles = "Admin,Manager,Tech,Technicien")]
+    [HttpGet("to-process")]
+    public async Task<ActionResult<List<AppointmentDetailsDto>>> GetAppointmentsToProcess()
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var currentUser = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (currentUser?.StoreId == null)
+            return BadRequest("Votre compte n'est associe a aucun magasin.");
+
+        var storeId = currentUser.StoreId.Value;
+
+        // IDs des appointments deja repris en reparation (pour les exclure)
+        var repairedAppointmentIds = await _db.Repairs
+            .Where(r => r.AppointmentId != null)
+            .Select(r => r.AppointmentId!.Value)
+            .ToListAsync();
+
+        var items = await _db.Appointments
+            .Include(a => a.User)
+            .Include(a => a.Store)
+            .Include(a => a.Product)
+            .Where(a =>
+                a.StoreId == storeId &&
+                a.Status == "Confirmed" &&
+                // On considere qu'un RDV "a traiter" = tout sauf un simple entretien
+                // deja planifie. Le type de service est libre cote client, on prend
+                // tout ce qui n'est pas deja traite.
+                !repairedAppointmentIds.Contains(a.Id))
+            .OrderBy(a => a.ScheduledAt)
+            .Select(a => new AppointmentDetailsDto
+            {
+                AppointmentId = a.Id,
+                UserId = a.UserId,
+                UserName = a.User != null ? a.User.Name ?? "" : "",
+                StoreId = a.StoreId,
+                StoreName = a.Store != null ? a.Store.Name ?? "" : "",
+                ProductId = a.ProductId,
+                ProductName = a.Product != null ? a.Product.Name ?? "" : "",
+                ServiceType = a.ServiceType,
+                ScheduledAt = a.ScheduledAt,
+                Status = a.Status,
+                Notes = a.Notes
+            })
+            .ToListAsync();
+
+        return Ok(items);
+    }
+
     // POST: api/appointments
     [HttpPost]
     public async Task<ActionResult<AppointmentDetailsDto>> CreateAppointment(CreateAppointmentDto dto)

@@ -20,6 +20,7 @@ namespace Velotech.API.Data
         public DbSet<Appointment> Appointments { get; set; }
         public DbSet<Repair> Repairs { get; set; }
         public DbSet<Payment> Payments { get; set; }
+        public DbSet<Notification> Notifications { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -116,6 +117,15 @@ namespace Velotech.API.Data
                 .HasForeignKey(p => p.UserId)
                 .OnDelete(DeleteBehavior.NoAction);
 
+            // Notifications : liees a un user, cascade sur suppression du user
+            modelBuilder.Entity<Notification>()
+                .HasOne(n => n.User)
+                .WithMany()
+                .HasForeignKey(n => n.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Notification>()
+                .HasIndex(n => new { n.UserId, n.IsRead });
         }
 
         /// <summary>

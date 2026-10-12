@@ -11,7 +11,7 @@ namespace Velotech.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin")]
+[Authorize] // Tout user connecte par defaut; les endpoints admin ont leur propre attribut
 public class UsersController : ControllerBase
 {
     private readonly VelotechDbContext _db;
@@ -22,7 +22,6 @@ public class UsersController : ControllerBase
     }
 
     // GET: api/users/me
-    [Authorize(Roles = "Admin,Manager,Tech,Client")]
     [HttpGet("me")]
     public async Task<ActionResult<UserDetailsDto>> GetMe()
     {
@@ -50,7 +49,6 @@ public class UsersController : ControllerBase
     }
 
     // PUT: api/users/me
-    [Authorize(Roles = "Admin,Manager,Tech,Client")]
     [HttpPut("me")]
     public async Task<ActionResult<UserDetailsDto>> UpdateMe(UpdateProfileDto dto)
     {
@@ -121,7 +119,6 @@ public class UsersController : ControllerBase
     /// les obligations comptables et fiscales (10 ans en Belgique), mais sans
     /// aucune donnee identifiante rattachee.
     /// </summary>
-    [Authorize(Roles = "Admin,Manager,Tech,Client")]
     [HttpDelete("me")]
     public async Task<ActionResult> DeleteMyAccount(DeleteAccountDto dto)
     {
@@ -132,8 +129,23 @@ public class UsersController : ControllerBase
         if (string.IsNullOrWhiteSpace(dto.Password))
             return BadRequest("Password confirmation is required to delete your account.");
 
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        // On charge le user AVEC son role pour le controle metier
+        var user = await _db.Users
+            .Include(u => u.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId);
         if (user == null) return NotFound();
+
+        // SECURITE METIER : interdiction pour les comptes de staff (Admin/Manager/Tech)
+        // de s'auto-supprimer. Un admin qui se supprimerait rendrait le back-office
+        // inaccessible. La suppression de ces comptes doit passer par un autre admin
+        // (futur endpoint DELETE /api/users/{id} reserve au role Admin).
+        var roleName = user.Role?.Name ?? "";
+        if (roleName == "Admin" || roleName == "Manager" || roleName == "Tech")
+        {
+            return BadRequest(
+                $"Les comptes {roleName} ne peuvent pas s'auto-supprimer. " +
+                "Contactez un administrateur pour la suppression.");
+        }
 
         // Verification du mot de passe (anti-detournement de compte)
         if (string.IsNullOrWhiteSpace(user.PasswordHash) ||
@@ -181,32 +193,45 @@ public class UsersController : ControllerBase
         return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
     }
 
-    // POST: api/users
+    // POST: api/users  (Admin only — creation d'un compte interne par un admin)
+    [Authorize(Roles = "Admin")]
     [HttpPost]
     public async Task<ActionResult<UserDetailsDto>> CreateUser(CreateUserDto dto)
     {
         if (string.IsNullOrWhiteSpace(dto.Name))
-            return BadRequest("Name is required.");
+            return BadRequest("Le nom est requis.");
 
         if (string.IsNullOrWhiteSpace(dto.Email))
-            return BadRequest("Email is required.");
+            return BadRequest("L'email est requis.");
 
-        // Email unique (recommandé)
+        if (string.IsNullOrWhiteSpace(dto.Password) || dto.Password.Length < 6)
+            return BadRequest("Le mot de passe doit faire au moins 6 caracteres.");
+
         var emailExists = await _db.Users.AnyAsync(u => u.Email == dto.Email);
         if (emailExists)
-            return BadRequest("Email already exists.");
-
-        var store = await _db.Stores.FirstOrDefaultAsync(s => s.Id == dto.StoreId);
-        if (store == null) return NotFound($"Store {dto.StoreId} not found.");
+            return BadRequest("Cet email est deja utilise.");
 
         var role = await _db.Roles.FirstOrDefaultAsync(r => r.Id == dto.RoleId);
-        if (role == null) return NotFound($"Role {dto.RoleId} not found.");
+        if (role == null) return BadRequest($"Role {dto.RoleId} introuvable.");
+
+        // Un Client n'a pas de StoreId. Les autres roles (Admin/Manager/Tech) en ont un.
+        Store? store = null;
+        if (role.Name != "Client")
+        {
+            if (!dto.StoreId.HasValue)
+                return BadRequest($"StoreId requis pour un compte {role.Name}.");
+
+            store = await _db.Stores.FirstOrDefaultAsync(s => s.Id == dto.StoreId.Value);
+            if (store == null) return BadRequest($"Magasin {dto.StoreId.Value} introuvable.");
+        }
 
         var user = new User
         {
             Name = dto.Name.Trim(),
             Email = dto.Email.Trim(),
-            StoreId = dto.StoreId,
+            PasswordHash = HashPassword(dto.Password),
+            IsActive = true,
+            StoreId = role.Name == "Client" ? null : dto.StoreId,
             RoleId = dto.RoleId
         };
 
@@ -218,8 +243,8 @@ public class UsersController : ControllerBase
             Id = user.Id,
             Name = user.Name ?? "",
             Email = user.Email ?? "",
-            StoreId = store.Id,
-            StoreName = store.Name ?? "",
+            StoreId = store?.Id ?? 0,
+            StoreName = store?.Name ?? "",
             RoleId = role.Id,
             RoleName = role.Name ?? ""
         };
@@ -227,7 +252,103 @@ public class UsersController : ControllerBase
         return CreatedAtAction(nameof(GetUserById), new { id = user.Id }, result);
     }
 
-    // GET: api/users/5
+    // PUT: api/users/5  (Admin only — modification complete d'un utilisateur)
+    [Authorize(Roles = "Admin")]
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult<UserDetailsDto>> UpdateUser(int id, UpdateUserDto dto)
+    {
+        var user = await _db.Users
+            .Include(u => u.Role)
+            .FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null) return NotFound();
+
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            return BadRequest("Le nom est requis.");
+        if (string.IsNullOrWhiteSpace(dto.Email))
+            return BadRequest("L'email est requis.");
+
+        // Email unique (hors soi-meme)
+        var emailTaken = await _db.Users.AnyAsync(u => u.Email == dto.Email && u.Id != id);
+        if (emailTaken) return BadRequest("Cet email est deja utilise par un autre compte.");
+
+        var role = await _db.Roles.FirstOrDefaultAsync(r => r.Id == dto.RoleId);
+        if (role == null) return BadRequest($"Role {dto.RoleId} introuvable.");
+
+        // Validation StoreId selon le role
+        if (role.Name != "Client")
+        {
+            if (!dto.StoreId.HasValue)
+                return BadRequest($"StoreId requis pour un compte {role.Name}.");
+            var storeExists = await _db.Stores.AnyAsync(s => s.Id == dto.StoreId.Value);
+            if (!storeExists) return BadRequest($"Magasin {dto.StoreId.Value} introuvable.");
+        }
+
+        user.Name = dto.Name.Trim();
+        user.Email = dto.Email.Trim();
+        user.RoleId = dto.RoleId;
+        user.StoreId = role.Name == "Client" ? null : dto.StoreId;
+
+        // Reset mot de passe optionnel (par admin, ex. user ayant perdu son mdp)
+        if (!string.IsNullOrWhiteSpace(dto.NewPassword))
+        {
+            if (dto.NewPassword.Length < 6)
+                return BadRequest("Le nouveau mot de passe doit faire au moins 6 caracteres.");
+            user.PasswordHash = HashPassword(dto.NewPassword);
+        }
+
+        await _db.SaveChangesAsync();
+
+        // Retour avec donnees fraiches
+        var updated = await _db.Users
+            .Include(u => u.Role)
+            .Include(u => u.Store)
+            .FirstAsync(u => u.Id == id);
+
+        return Ok(new UserDetailsDto
+        {
+            Id = updated.Id,
+            Name = updated.Name ?? "",
+            Email = updated.Email ?? "",
+            RoleId = updated.RoleId,
+            RoleName = updated.Role?.Name ?? "",
+            StoreId = updated.StoreId ?? 0,
+            StoreName = updated.Store?.Name ?? "",
+            IsDeleted = updated.IsDeleted
+        });
+    }
+
+    // DELETE: api/users/5  (Admin only — suppression soft + anonymisation RGPD)
+    [Authorize(Roles = "Admin")]
+    [HttpDelete("{id:int}")]
+    public async Task<ActionResult> DeleteUser(int id)
+    {
+        // Protection : l'admin connecte ne peut pas se supprimer lui-meme
+        var currentUserIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (int.TryParse(currentUserIdStr, out var currentUserId) && currentUserId == id)
+            return BadRequest("Vous ne pouvez pas supprimer votre propre compte depuis cet endpoint.");
+
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null) return NotFound();
+
+        if (user.IsDeleted)
+            return BadRequest("Ce compte est deja supprime.");
+
+        // Meme pattern que l'auto-suppression client : anonymisation + soft delete
+        user.Name = "Compte supprime";
+        user.Email = $"deleted-{user.Id}@velotech.local";
+        user.PasswordHash = null;
+        user.PasswordResetToken = null;
+        user.PasswordResetExpiresAt = null;
+        user.IsActive = false;
+        user.IsDeleted = true;
+        user.DeletedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    // GET: api/users/5  (Admin only — un user doit utiliser /me pour son propre profil)
+    [Authorize(Roles = "Admin")]
     [HttpGet("{id:int}")]
     public async Task<ActionResult<UserDetailsDto>> GetUserById(int id)
     {
@@ -246,13 +367,16 @@ public class UsersController : ControllerBase
             RoleId = user.RoleId,
             RoleName = user.Role?.Name ?? "",
             StoreId = user.StoreId ?? 0,
-            StoreName = user.Store?.Name ?? ""
+            StoreName = user.Store?.Name ?? "",
+            IsDeleted = user.IsDeleted,
+            DeletedAt = user.DeletedAt
         };
 
         return Ok(dto);
     }
 
-    // GET: api/users?storeId=1 (optionnel mais utile)
+    // GET: api/users?storeId=1  (Admin only — liste de tous les utilisateurs)
+    [Authorize(Roles = "Admin")]
     [HttpGet]
     public async Task<ActionResult<List<UserDetailsDto>>> GetUsers([FromQuery] int? storeId)
     {
@@ -274,7 +398,9 @@ public class UsersController : ControllerBase
                 RoleId = u.RoleId,
                 RoleName = u.Role != null ? u.Role.Name! : "",
                 StoreId = u.StoreId ?? 0,
-                StoreName = u.Store != null ? u.Store.Name! : ""
+                StoreName = u.Store != null ? u.Store.Name! : "",
+                IsDeleted = u.IsDeleted,
+                DeletedAt = u.DeletedAt
             })
             .ToListAsync();
 
