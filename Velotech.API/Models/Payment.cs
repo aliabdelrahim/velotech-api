@@ -25,4 +25,10 @@ public class Payment
     public string Status { get; set; } = "Pending";
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? PaidAt { get; set; }
+
+    // Stripe : id de la Checkout Session (cs_...) et du PaymentIntent (pi_...).
+    // Null pour les paiements encaisses en magasin (saisis par le staff).
+    public string? StripeSessionId { get; set; }
+    public string? StripePaymentIntentId { get; set; }
 }

@@ -4,11 +4,26 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using Velotech.API.Data;
+using Velotech.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddDbContext<VelotechDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        // Azure SQL (offre gratuite serverless) se met en pause apres 1h
+        // d'inactivite : la premiere connexion peut echouer le temps du reveil.
+        sql => sql.EnableRetryOnFailure(maxRetryCount: 6, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)));
+
+// Stripe : cles lues depuis la config (user-secrets en local, App Settings en prod).
+// Une seule instance StripeClient (recommandation Stripe : pas de cle globale
+// StripeConfiguration.ApiKey). Non enregistree si la cle est absente : l'API
+// demarre quand meme et l'endpoint de paiement repond 503.
+builder.Services.Configure<StripeSettings>(builder.Configuration.GetSection("Stripe"));
+var stripeKey = builder.Configuration["Stripe:SecretKey"];
+if (!string.IsNullOrWhiteSpace(stripeKey))
+    builder.Services.AddSingleton(new Stripe.StripeClient(stripeKey));
+builder.Services.AddScoped<StripeCheckoutService>();
 
 builder.Services.AddControllers();
 
@@ -77,11 +92,13 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod()
     );
 
+    // Origines autorisees : Cors:AllowedOrigins (ex. App Setting
+    // Cors__AllowedOrigins__0 = https://xxx.azurestaticapps.net)
+    var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+        ?? new[] { "https://velotech.be", "https://www.velotech.be" };
+
     options.AddPolicy("ProdStrict", policy =>
-        policy.WithOrigins(
-                  "https://velotech.be",
-                  "https://www.velotech.be"
-              )
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials()
@@ -120,4 +137,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Sonde de sante (monitoring / "reveil" de l'app sur un hebergement gratuit)
+app.MapGet("/health", () => Results.Ok("ok"));
 app.Run();

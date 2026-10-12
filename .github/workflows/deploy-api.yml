@@ -1,0 +1,39 @@
+# Deploiement de l'API sur Azure App Service (plan F1 gratuit).
+# Authentification GitHub -> Azure par OIDC (federated credential) :
+# aucun mot de passe ni profil de publication n'est stocke dans GitHub.
+# Variables de repo (non secretes) : AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+name: Deploy API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish
+        run: dotnet publish Velotech.API/Velotech.API.csproj -c Release -o ${{ runner.temp }}/api
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: velotech-api
+          package: ${{ runner.temp }}/api

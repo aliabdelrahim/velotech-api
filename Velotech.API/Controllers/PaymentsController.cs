@@ -19,7 +19,9 @@ public class PaymentsController : ControllerBase
         _db = db;
     }
 
-    // POST: api/payments  (paiement simulé)
+    // POST: api/payments  (encaissement en magasin : especes, terminal...)
+    // Les clients paient en ligne via Stripe (StripeController).
+    [Authorize(Roles = "Admin,Manager")]
     [HttpPost]
     public async Task<ActionResult<PaymentDetailsDto>> CreatePayment(CreatePaymentDto dto)
     {
@@ -47,8 +49,12 @@ public class PaymentsController : ControllerBase
             var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == dto.OrderId.Value);
             if (order == null) return NotFound($"Order {dto.OrderId.Value} not found.");
 
+            if (order.Status == "Cancelled")
+                return BadRequest("This order was cancelled.");
+
             paymentType = "Order";
             orderId = order.Id;
+            order.Status = "Paid";
 
             // optionnel: vérifier que montant correspond
             // if (dto.Amount != order.TotalAmount) return BadRequest("Amount must match order total.");
@@ -89,7 +95,8 @@ public class PaymentsController : ControllerBase
             RentalId = rentalId,
             RepairId = repairId,
             Status = "Paid",
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            PaidAt = DateTime.UtcNow
         };
 
         _db.Payments.Add(payment);

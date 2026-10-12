@@ -15,6 +15,10 @@ public class OrdersController : ControllerBase
 {
     private readonly VelotechDbContext _db;
 
+    // Memes regles que le panier cote front (cart.ts)
+    public const decimal ShippingFeeStandard = 9.90m;
+    public const decimal FreeShippingThreshold = 50m;
+
     public OrdersController(VelotechDbContext db)
     {
         _db = db;
@@ -32,6 +36,13 @@ public class OrdersController : ControllerBase
 
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.UserId);
         if (user == null) return NotFound($"User {dto.UserId} not found.");
+
+        // Un client ne peut commander que pour lui-meme (le staff peut saisir
+        // une commande pour un client depuis le back-office).
+        var tokenUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var isStaff = User.IsInRole("Admin") || User.IsInRole("Manager");
+        if (!isStaff && tokenUserId != dto.UserId.ToString())
+            return Forbid();
 
         // Note : un client peut commander dans n'importe quel magasin.
         // Aucune contrainte user.StoreId ici (celle-ci ne concerne que le staff).
@@ -98,7 +109,11 @@ public class OrdersController : ControllerBase
             storeStocks[item.ProductId].StockSale -= item.Quantity;
         }
 
-        order.TotalAmount = total;
+        // Frais de port calcules cote serveur (jamais confiance au montant du front)
+        var isPickup = string.Equals(dto.ShippingMode, "pickup", StringComparison.OrdinalIgnoreCase);
+        order.ShippingFee = isPickup || total >= FreeShippingThreshold ? 0m : ShippingFeeStandard;
+        order.TotalAmount = total + order.ShippingFee;
+        order.Status = "PendingPayment";
 
         _db.Orders.Add(order);
         await _db.SaveChangesAsync();
@@ -108,6 +123,8 @@ public class OrdersController : ControllerBase
             OrderId = order.Id,
             OrderDate = order.OrderDate,
             TotalAmount = order.TotalAmount,
+            ShippingFee = order.ShippingFee,
+            Status = order.Status,
             StoreName = store.Name ?? "",
             CustomerName = user.Name ?? "",
             Items = order.OrderItems.Select(oi => new OrderItemDto
@@ -135,6 +152,9 @@ public class OrdersController : ControllerBase
             .Include(o => o.Store)
             .Include(o => o.User)
             .Where(o => o.UserId == userId)
+            // Seules les commandes payees comptent (les paiements Stripe abandonnes
+            // laissent des commandes "Cancelled" qui fausseraient les totaux).
+            .Where(o => o.Status == "Paid")
             .OrderByDescending(o => o.OrderDate)
             .ToListAsync();
 
@@ -153,6 +173,8 @@ public class OrdersController : ControllerBase
             OrderId = order.Id,
             OrderDate = order.OrderDate,
             TotalAmount = order.TotalAmount,
+            ShippingFee = order.ShippingFee,
+            Status = order.Status,
             StoreName = order.Store?.Name ?? "",
             CustomerName = order.User?.Name ?? "",
             Items = order.OrderItems.Select(oi => new OrderItemDto
@@ -177,6 +199,7 @@ public class OrdersController : ControllerBase
             .Include(o => o.Store)
             .Include(o => o.User)
             .Where(o => o.StoreId == storeId)
+            .Where(o => o.Status == "Paid")
             .OrderByDescending(o => o.OrderDate)
             .ToListAsync();
 
@@ -195,6 +218,8 @@ public class OrdersController : ControllerBase
             OrderId = order.Id,
             OrderDate = order.OrderDate,
             TotalAmount = order.TotalAmount,
+            ShippingFee = order.ShippingFee,
+            Status = order.Status,
             StoreName = order.Store?.Name ?? "",
             CustomerName = order.User?.Name ?? "",
             Items = order.OrderItems.Select(oi => new OrderItemDto
@@ -233,6 +258,8 @@ public class OrdersController : ControllerBase
             OrderId = order.Id,
             OrderDate = order.OrderDate,
             TotalAmount = order.TotalAmount,
+            ShippingFee = order.ShippingFee,
+            Status = order.Status,
             StoreName = order.Store?.Name ?? "",
             CustomerName = order.User?.Name ?? "", // idem ici
             Items = order.OrderItems.Select(oi => new OrderItemDto
@@ -246,17 +273,15 @@ public class OrdersController : ControllerBase
         return Ok(dto);
     }
 
-    // PUT: api/orders/status
+    // PUT: api/orders/status (staff uniquement)
+    [Authorize(Roles = "Admin,Manager")]
     [HttpPut("status")]
     public async Task<IActionResult> UpdateStatus(UpdateOrderDto dto)
     {
         var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == dto.OrderId);
         if (order == null) return NotFound();
 
-        // Exemple simple: statut stocké dans Payments plutôt que Orders,
-        // donc ici on ne change rien si ton modèle Order n'a pas Status.
-        // Si tu as ajouté Status dans Order, décommente:
-        // order.Status = dto.Status;
+        order.Status = dto.Status;
 
         await _db.SaveChangesAsync();
         return NoContent();

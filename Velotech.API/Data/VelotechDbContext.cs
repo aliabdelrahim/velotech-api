@@ -117,6 +117,15 @@ namespace Velotech.API.Data
                 .HasForeignKey(p => p.UserId)
                 .OnDelete(DeleteBehavior.NoAction);
 
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => p.StripeSessionId)
+                .IsUnique()
+                .HasFilter("[StripeSessionId] IS NOT NULL");
+
+            modelBuilder.Entity<Order>()
+                .Property(o => o.Status)
+                .HasMaxLength(20);
+
             // Notifications : liees a un user, cascade sur suppression du user
             modelBuilder.Entity<Notification>()
                 .HasOne(n => n.User)
