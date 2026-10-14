@@ -116,7 +116,9 @@ using (var scope = app.Services.CreateScope())
     await DbSeeder.SeedAsync(db);
 }
 
-if (app.Environment.IsDevelopment())
+// Swagger : toujours en dev ; en prod seulement si l'App Setting
+// Swagger__Enabled = true (interrupteur sans redeploiement, ex. demo / defense).
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("Swagger:Enabled"))
 {
     app.UseSwagger();
     app.UseSwaggerUI();
