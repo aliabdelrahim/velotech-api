@@ -6,6 +6,7 @@ using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
 using Velotech.API.Security;
+using Velotech.API.Services;
 
 namespace Velotech.API.Controllers;
 
@@ -15,10 +16,12 @@ namespace Velotech.API.Controllers;
 public class RentalsController : ControllerBase
 {
     private readonly VelotechDbContext _db;
+    private readonly StripeCheckoutService _stripe;
 
-    public RentalsController(VelotechDbContext db)
+    public RentalsController(VelotechDbContext db, StripeCheckoutService stripe)
     {
         _db = db;
+        _stripe = stripe;
     }
 
     // GET: api/rentals/me
@@ -130,7 +133,8 @@ public class RentalsController : ControllerBase
             StartDate = dto.StartDate,
             EndDate = dto.EndDate,
             TotalPrice = total,
-            Status = "Confirmed",
+            // Velo reserve en attendant le paiement (liberation auto apres 30 min)
+            Status = "PendingPayment",
             CreatedAt = DateTime.UtcNow
         };
 
@@ -252,6 +256,25 @@ public class RentalsController : ControllerBase
         if (!User.IsStaff() &&
             await _db.Payments.AnyAsync(pay => pay.RentalId == rental.Id && pay.Status == "Paid"))
             return Conflict("This rental is already paid. Please contact the store to cancel it and get a refund.");
+
+        // Paiement Stripe en cours : on ferme la session pour qu'elle ne puisse plus
+        // etre payee apres l'annulation (et on verifie qu'elle ne l'a pas deja ete).
+        if (_stripe.IsConfigured)
+        {
+            var openSessions = await _db.Payments
+                .Where(pay => pay.RentalId == rental.Id && pay.Status == "Pending" && pay.StripeSessionId != null)
+                .Select(pay => pay.StripeSessionId!)
+                .ToListAsync();
+            foreach (var sessionId in openSessions)
+            {
+                var session = await _stripe.GetSessionAsync(sessionId);
+                if (session.Status == "open")
+                    session = await _stripe.ExpireSessionAsync(sessionId);
+                var synced = await _stripe.SyncAsync(session);
+                if (synced?.Status == "Paid" && !User.IsStaff())
+                    return Conflict("This rental is already paid. Please contact the store to cancel it and get a refund.");
+            }
+        }
 
         rental.Status = "Cancelled";
 

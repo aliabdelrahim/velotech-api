@@ -21,8 +21,10 @@ public class Rental
 
     public decimal TotalPrice { get; set; }
 
-    // "Pending", "Confirmed", "Active", "Completed", "Cancelled"
-    public string Status { get; set; } = "Pending";
+    // "PendingPayment", "Confirmed", "Active", "Completed", "Cancelled"
+    // Creee en PendingPayment (velo reserve), Confirmed apres paiement. Annulee
+    // automatiquement si elle n'est pas payee sous 30 min (PendingPaymentCleanupService).
+    public string Status { get; set; } = "PendingPayment";
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

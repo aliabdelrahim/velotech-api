@@ -65,8 +65,13 @@ public class PaymentsController : ControllerBase
             var rental = await _db.Rentals.FirstOrDefaultAsync(r => r.Id == dto.RentalId.Value);
             if (rental == null) return NotFound($"Rental {dto.RentalId.Value} not found.");
 
+            if (rental.Status == "Cancelled")
+                return BadRequest("This rental was cancelled.");
+
             paymentType = "Rental";
             rentalId = rental.Id;
+            if (rental.Status == "PendingPayment")
+                rental.Status = "Confirmed";
         }
         else
         {

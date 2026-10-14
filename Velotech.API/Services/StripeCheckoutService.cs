@@ -151,6 +151,13 @@ public class StripeCheckoutService
         }
         else if (payment.RentalId.HasValue)
         {
+            // Location reservee -> confirmee par le paiement
+            var confirmed = await _db.Rentals
+                .Where(r => r.Id == payment.RentalId.Value && r.Status == "PendingPayment")
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "Confirmed"));
+            if (confirmed == 0)
+                _logger.LogWarning("Paiement {PaymentId} recu pour la location {RentalId} qui n'etait plus en attente (a verifier / rembourser)",
+                    payment.Id, payment.RentalId);
             link = "/my-rentals";
         }
 
@@ -175,10 +182,11 @@ public class StripeCheckoutService
     {
         if (!await TryTransitionAsync(payment, "Failed", null)) return;
 
+        // Commande : annulee tout de suite (le front en recree une au prochain essai).
+        // Location : elle reste reservee, le client peut retenter depuis "Mes locations" ;
+        // la tache de nettoyage la libere si elle n'est toujours pas payee apres 30 min.
         if (payment.OrderId.HasValue)
             await CancelPendingOrderAsync(payment.OrderId.Value);
-
-        await _db.SaveChangesAsync();
     }
 
     /// <summary>
@@ -203,27 +211,105 @@ public class StripeCheckoutService
         return updated == 1;
     }
 
-    /// <summary>Annule une commande non payee et restitue son stock vente.</summary>
-    public async Task CancelPendingOrderAsync(int orderId)
+    /// <summary>
+    /// Annule une commande non payee et restitue son stock vente.
+    /// Atomique (UPDATE ... WHERE Status = 'PendingPayment') : si le webhook et la
+    /// tache de nettoyage passent en meme temps, le stock n'est rendu qu'une fois.
+    /// </summary>
+    public async Task<bool> CancelPendingOrderAsync(int orderId)
     {
-        var order = await _db.Orders
+        var cancelled = await _db.Orders
+            .Where(o => o.Id == orderId && o.Status == "PendingPayment")
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.Status, "Cancelled"));
+        if (cancelled == 0) return false;
+
+        var order = await _db.Orders.AsNoTracking()
             .Include(o => o.OrderItems)
             .FirstAsync(o => o.Id == orderId);
 
-        if (order.Status != "PendingPayment") return;
-
-        order.Status = "Cancelled";
-
-        var productIds = order.OrderItems!.Select(i => i.ProductId).ToList();
-        var stocks = await _db.StoreProducts
-            .Where(sp => sp.StoreId == order.StoreId && productIds.Contains(sp.ProductId))
-            .ToDictionaryAsync(sp => sp.ProductId);
-
         foreach (var item in order.OrderItems!)
         {
-            if (stocks.TryGetValue(item.ProductId, out var sp))
-                sp.StockSale += item.Quantity;
+            await _db.StoreProducts
+                .Where(sp => sp.StoreId == order.StoreId && sp.ProductId == item.ProductId)
+                .ExecuteUpdateAsync(s => s.SetProperty(sp => sp.StockSale, sp => sp.StockSale + item.Quantity));
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Annule une location jamais payee et remet le velo en location.
+    /// Atomique, et refuse si un paiement Stripe est encore en cours pour elle.
+    /// </summary>
+    public async Task<bool> CancelPendingRentalAsync(int rentalId)
+    {
+        var cancelled = await _db.Rentals
+            .Where(r => r.Id == rentalId && r.Status == "PendingPayment"
+                        && !_db.Payments.Any(p => p.RentalId == r.Id && p.Status == "Pending"))
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "Cancelled"));
+        if (cancelled == 0) return false;
+
+        var rental = await _db.Rentals.AsNoTracking().FirstAsync(r => r.Id == rentalId);
+        await _db.StoreProducts
+            .Where(sp => sp.StoreId == rental.StoreId && sp.ProductId == rental.ProductId)
+            .ExecuteUpdateAsync(s => s.SetProperty(sp => sp.StockRental, sp => sp.StockRental + 1));
+        return true;
+    }
+
+    /// <summary>Delai apres lequel une reservation (commande / location) non payee est liberee.</summary>
+    public static readonly TimeSpan PaymentHoldDelay = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Nettoyage periodique (PendingPaymentCleanupService) :
+    ///  1. paiements Stripe restes "Pending" au-dela de la duree de vie d'une session
+    ///     (webhook perdu) : on demande l'etat reel a Stripe ;
+    ///  2. locations et commandes non payees depuis plus de 30 min, sans paiement en
+    ///     cours : annulees, et le stock est rendu.
+    /// </summary>
+    public async Task<(int payments, int rentals, int orders)> CleanupAsync(CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        int syncedPayments = 0, cancelledRentals = 0, cancelledOrders = 0;
+
+        if (IsConfigured)
+        {
+            var stalePayments = await _db.Payments
+                .Where(p => p.Status == "Pending" && p.StripeSessionId != null
+                            && p.CreatedAt < now.AddMinutes(-40))
+                .Select(p => p.StripeSessionId!)
+                .ToListAsync(ct);
+
+            foreach (var sessionId in stalePayments)
+            {
+                try
+                {
+                    await SyncAsync(await GetSessionAsync(sessionId));
+                    syncedPayments++;
+                }
+                catch (StripeException ex)
+                {
+                    _logger.LogWarning(ex, "Nettoyage : session Stripe {SessionId} illisible", sessionId);
+                }
+            }
+        }
+
+        var holdLimit = now - PaymentHoldDelay;
+
+        var rentalIds = await _db.Rentals
+            .Where(r => r.Status == "PendingPayment" && r.CreatedAt < holdLimit)
+            .Select(r => r.Id)
+            .ToListAsync(ct);
+        foreach (var id in rentalIds)
+            if (await CancelPendingRentalAsync(id)) cancelledRentals++;
+
+        var orderIds = await _db.Orders
+            .Where(o => o.Status == "PendingPayment" && o.OrderDate < holdLimit
+                        && !_db.Payments.Any(p => p.OrderId == o.Id && p.Status == "Pending"))
+            .Select(o => o.Id)
+            .ToListAsync(ct);
+        foreach (var id in orderIds)
+            if (await CancelPendingOrderAsync(id)) cancelledOrders++;
+
+        return (syncedPayments, cancelledRentals, cancelledOrders);
     }
 
     // Suffixe de 8 lettres aleatoires demande par Stripe pour integration_identifier

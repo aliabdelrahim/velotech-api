@@ -24,6 +24,8 @@ var stripeKey = builder.Configuration["Stripe:SecretKey"];
 if (!string.IsNullOrWhiteSpace(stripeKey))
     builder.Services.AddSingleton(new Stripe.StripeClient(stripeKey));
 builder.Services.AddScoped<StripeCheckoutService>();
+// Libere les locations / commandes non payees apres 30 min (toutes les 5 min)
+builder.Services.AddHostedService<PendingPaymentCleanupService>();
 
 builder.Services.AddControllers();
 
