@@ -31,8 +31,16 @@ public static class DemoDataSeeder
     {
         await FixLegacyProductImagesAsync(db);
 
+        // Mot de passe des comptes de demo defini dans Azure (Seed__DemoPassword) :
+        // il est (re)applique a chaque demarrage, ce qui permet de le fixer ou de
+        // le changer apres coup sans toucher au code.
+        var configuredPassword = config["Seed:DemoPassword"];
         if (await db.Users.AnyAsync(u => u.Email == MarkerEmail))
+        {
+            if (!string.IsNullOrWhiteSpace(configuredPassword))
+                await SyncDemoPasswordsAsync(db, configuredPassword, logger);
             return;
+        }
 
         var password = config["Seed:DemoPassword"];
         if (string.IsNullOrWhiteSpace(password))
@@ -342,6 +350,38 @@ public static class DemoDataSeeder
             }
         }
         if (changed) await db.SaveChangesAsync();
+    }
+
+    /// <summary>Applique le mot de passe configure aux comptes de demo (domaine example.com).</summary>
+    private static async Task SyncDemoPasswordsAsync(VelotechDbContext db, string password, ILogger logger)
+    {
+        var demoUsers = await db.Users
+            .Where(u => u.Email.EndsWith("@example.com") && !u.IsDeleted)
+            .ToListAsync();
+        var updated = 0;
+        foreach (var user in demoUsers)
+        {
+            if (user.PasswordHash != null && VerifyPassword(password, user.PasswordHash)) continue;
+            user.PasswordHash = HashPassword(password);
+            user.FailedLoginCount = 0;
+            user.LockoutEndAt = null;
+            updated++;
+        }
+        if (updated > 0)
+        {
+            await db.SaveChangesAsync();
+            logger.LogInformation("Mot de passe de demonstration applique a {Count} compte(s).", updated);
+        }
+    }
+
+    private static bool VerifyPassword(string password, string stored)
+    {
+        var parts = stored.Split('.');
+        if (parts.Length != 3 || !int.TryParse(parts[0], out var iterations)) return false;
+        var salt = Convert.FromBase64String(parts[1]);
+        var expected = Convert.FromBase64String(parts[2]);
+        using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, iterations, HashAlgorithmName.SHA256);
+        return CryptographicOperations.FixedTimeEquals(pbkdf2.GetBytes(32), expected);
     }
 
     private static string HashPassword(string password)
