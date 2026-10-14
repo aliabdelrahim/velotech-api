@@ -5,6 +5,7 @@ using System.Security.Claims;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
+using Velotech.API.Security;
 
 namespace Velotech.API.Controllers;
 
@@ -122,6 +123,10 @@ public class AppointmentsController : ControllerBase
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.UserId);
         if (user == null) return NotFound($"User {dto.UserId} not found.");
 
+        // Un client ne peut agir que pour lui-meme (le staff peut saisir pour un client).
+        if (!User.IsStaff() && User.GetUserId() != dto.UserId)
+            return Forbid();
+
         // Note : un client peut prendre rendez-vous dans n'importe quel magasin.
         // Aucune contrainte user.StoreId ici (celle-ci ne concerne que le staff).
 
@@ -178,6 +183,7 @@ public class AppointmentsController : ControllerBase
             .FirstOrDefaultAsync(a => a.Id == id);
 
         if (appointment == null) return NotFound();
+        if (!User.CanAccess(appointment.UserId)) return Forbid();
 
         var dto = new AppointmentDetailsDto
         {
@@ -197,7 +203,8 @@ public class AppointmentsController : ControllerBase
         return Ok(dto);
     }
 
-    // GET: api/appointments?storeId=1&date=2026-02-25
+    // GET: api/appointments?storeId=1&date=2026-02-25 (back-office)
+    [Authorize(Roles = UserClaims.StaffRoles)]
     [HttpGet]
     public async Task<ActionResult<List<AppointmentDetailsDto>>> GetAppointments(
         [FromQuery] int? storeId,
@@ -250,6 +257,7 @@ public class AppointmentsController : ControllerBase
     {
         var appointment = await _db.Appointments.FirstOrDefaultAsync(a => a.Id == id);
         if (appointment == null) return NotFound();
+        if (!User.CanAccess(appointment.UserId)) return Forbid();
 
         if (appointment.Status == "Cancelled")
             return BadRequest("Appointment is already cancelled.");

@@ -5,6 +5,7 @@ using System.Security.Claims;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
+using Velotech.API.Security;
 
 namespace Velotech.API.Controllers;
 
@@ -72,6 +73,10 @@ public class RentalsController : ControllerBase
         // 3) User
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.UserId);
         if (user == null) return NotFound($"User {dto.UserId} not found.");
+
+        // Un client ne peut agir que pour lui-meme (le staff peut saisir pour un client).
+        if (!User.IsStaff() && User.GetUserId() != dto.UserId)
+            return Forbid();
 
         // Note : un client peut reserver dans n'importe quel magasin.
         // Aucune contrainte user.StoreId ici (celle-ci ne concerne que le staff).
@@ -164,6 +169,7 @@ public class RentalsController : ControllerBase
             .FirstOrDefaultAsync(r => r.Id == id);
 
         if (rental == null) return NotFound();
+        if (!User.CanAccess(rental.UserId)) return Forbid();
 
         var dto = new RentalDetailsDto
         {
@@ -183,7 +189,8 @@ public class RentalsController : ControllerBase
         return Ok(dto);
     }
 
-    // GET: api/rentals?storeId=1&userId=2&status=Confirmed
+    // GET: api/rentals?storeId=1&userId=2&status=Confirmed (back-office)
+    [Authorize(Roles = UserClaims.StaffRoles)]
     [HttpGet]
     public async Task<ActionResult<List<RentalDetailsDto>>> GetRentals(
         [FromQuery] int? storeId,
@@ -232,12 +239,19 @@ public class RentalsController : ControllerBase
     {
         var rental = await _db.Rentals.FirstOrDefaultAsync(r => r.Id == id);
         if (rental == null) return NotFound();
+        if (!User.CanAccess(rental.UserId)) return Forbid();
 
         if (rental.Status == "Cancelled")
             return BadRequest("Rental is already cancelled.");
 
         if (rental.Status == "Completed")
             return BadRequest("Completed rental cannot be cancelled.");
+
+        // Location deja payee : l'annulation implique un remboursement, gere par
+        // le magasin (staff) depuis le Dashboard Stripe. Le client doit le contacter.
+        if (!User.IsStaff() &&
+            await _db.Payments.AnyAsync(pay => pay.RentalId == rental.Id && pay.Status == "Paid"))
+            return Conflict("This rental is already paid. Please contact the store to cancel it and get a refund.");
 
         rental.Status = "Cancelled";
 
@@ -253,6 +267,7 @@ public class RentalsController : ControllerBase
     }
 
     // POST: api/rentals/5/return
+    [Authorize(Roles = UserClaims.StaffRoles)]
     [HttpPost("{id:int}/return")]
     public async Task<IActionResult> ReturnRental(int id, ReturnRentalDto dto)
     {

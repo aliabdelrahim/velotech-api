@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
+using Velotech.API.Security;
 
 namespace Velotech.API.Controllers;
 
@@ -128,6 +129,7 @@ public class PaymentsController : ControllerBase
             .FirstOrDefaultAsync(p => p.Id == id);
 
         if (payment == null) return NotFound();
+        if (!User.CanAccess(payment.UserId)) return Forbid();
 
         return Ok(new PaymentDetailsDto
         {

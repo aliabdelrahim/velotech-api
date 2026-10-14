@@ -17,11 +17,13 @@ public class AuthController : ControllerBase
 {
     private readonly VelotechDbContext _db;
     private readonly IConfiguration _config;
+    private readonly IWebHostEnvironment _env;
 
-    public AuthController(VelotechDbContext db, IConfiguration config)
+    public AuthController(VelotechDbContext db, IConfiguration config, IWebHostEnvironment env)
     {
         _db = db;
         _config = config;
+        _env = env;
     }
 
     // POST: api/auth/register
@@ -112,16 +114,18 @@ public class AuthController : ControllerBase
 
             // TODO: en production, envoyer un email avec un lien :
             //       https://velotech.com/reset-password/{token}
-            //       Pour le dev/TFE, on log le lien en console.
-            Console.WriteLine($"[Velotech] Reset link for {user.Email} : /reset-password/{token}");
-
-            // Le token est retourne EN DEV uniquement pour faciliter les tests.
-            // En production, retirer ce champ.
-            return Ok(new
+            // Le token n'est expose (console + reponse) QU'EN DEVELOPPEMENT :
+            // en production, le renvoyer permettrait a n'importe qui de
+            // reinitialiser le mot de passe de n'importe quel compte (admin compris).
+            if (_env.IsDevelopment())
             {
-                message = "If the email exists, a reset link has been sent.",
-                devToken = token // a retirer en prod
-            });
+                Console.WriteLine($"[Velotech] Reset link for {user.Email} : /reset-password/{token}");
+                return Ok(new
+                {
+                    message = "If the email exists, a reset link has been sent.",
+                    devToken = token
+                });
+            }
         }
 
         // Reponse identique meme si l'email n'existe pas (anti-enumeration)

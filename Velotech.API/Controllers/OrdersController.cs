@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
+using Velotech.API.Security;
 
 namespace Velotech.API.Controllers;
 
@@ -190,7 +191,8 @@ public class OrdersController : ControllerBase
         return Ok(result);
     }
 
-    // GET: api/orders/store/1
+    // GET: api/orders/store/1 (back-office)
+    [Authorize(Roles = UserClaims.StaffRoles)]
     [HttpGet("store/{storeId:int}")]
     public async Task<ActionResult<List<OrderDetailsDto>>> GetOrdersByStore(int storeId)
     {
@@ -246,6 +248,7 @@ public class OrdersController : ControllerBase
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null) return NotFound();
+        if (!User.CanAccess(order.UserId)) return Forbid();
 
         // Récup produits pour noms
         var productIds = order.OrderItems.Select(i => i.ProductId).Distinct().ToList();
