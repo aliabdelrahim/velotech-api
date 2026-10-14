@@ -83,12 +83,61 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(user.PasswordHash))
             return Unauthorized("User has no password set. Please register a new user.");
 
+        // Chaque tentative "reserve" d'abord une des 5 places autorisees, en une seule
+        // requete atomique (UPDATE ... WHERE compteur < 5 ET compte non bloque), AVANT
+        // de verifier le mot de passe. Ainsi, meme 100 tentatives envoyees en meme temps
+        // par un robot ne permettent d'essayer que 5 mots de passe.
+        var now = DateTime.UtcNow;
+        var reserved = await _db.Users
+            .Where(u => u.Id == user.Id
+                        && (u.LockoutEndAt == null || u.LockoutEndAt <= now)
+                        && u.FailedLoginCount < MaxFailedLogins)
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.FailedLoginCount, u => u.FailedLoginCount + 1));
+
+        if (reserved == 0)
+        {
+            var lockoutEndAt = await _db.Users.Where(u => u.Id == user.Id)
+                .Select(u => u.LockoutEndAt).FirstAsync();
+            return LockedOut(lockoutEndAt > now ? lockoutEndAt.Value : now.Add(LockoutDuration));
+        }
+
         if (!VerifyPassword(dto.Password, user.PasswordHash))
-            return Unauthorized("Invalid credentials.");
+        {
+            // 5e echec : blocage de 15 min (et compteur remis a zero pour la suite)
+            var lockoutEnd = DateTime.UtcNow.Add(LockoutDuration);
+            var locked = await _db.Users
+                .Where(u => u.Id == user.Id && u.FailedLoginCount >= MaxFailedLogins)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(u => u.LockoutEndAt, lockoutEnd)
+                    .SetProperty(u => u.FailedLoginCount, 0));
+
+            return locked > 0 ? LockedOut(lockoutEnd) : Unauthorized("Invalid credentials.");
+        }
+
+        // Connexion reussie : remise a zero du compteur
+        await _db.Users.Where(u => u.Id == user.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(u => u.FailedLoginCount, 0)
+                .SetProperty(u => u.LockoutEndAt, (DateTime?)null));
 
         var token = CreateJwtToken(user);
 
         return Ok(token);
+    }
+
+    // Blocage apres echecs de connexion successifs
+    private const int MaxFailedLogins = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    private ObjectResult LockedOut(DateTime lockoutEndUtc)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling((lockoutEndUtc - DateTime.UtcNow).TotalMinutes));
+        Response.Headers.RetryAfter = (minutes * 60).ToString();
+        return StatusCode(StatusCodes.Status429TooManyRequests, new
+        {
+            message = $"Too many failed attempts. Try again in {minutes} minute(s).",
+            retryAfterMinutes = minutes
+        });
     }
 
     // POST: api/auth/forgot-password
@@ -155,6 +204,9 @@ public class AuthController : ControllerBase
         user.PasswordHash = HashPassword(dto.NewPassword);
         user.PasswordResetToken = null;
         user.PasswordResetExpiresAt = null;
+        // Le titulaire du compte a prouve son identite par e-mail : on debloque.
+        user.FailedLoginCount = 0;
+        user.LockoutEndAt = null;
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Password has been reset successfully." });
