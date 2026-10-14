@@ -8,6 +8,7 @@ using System.Text;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
+using Velotech.API.Security;
 
 namespace Velotech.API.Controllers;
 
@@ -36,8 +37,8 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(dto.Email))
             return BadRequest("Email is required.");
 
-        if (string.IsNullOrWhiteSpace(dto.Password) || dto.Password.Length < 6)
-            return BadRequest("Password must be at least 6 characters.");
+        if (!PasswordPolicy.IsStrong(dto.Password))
+            return BadRequest(PasswordPolicy.ErrorMessage);
 
         var emailExists = await _db.Users.AnyAsync(u => u.Email == dto.Email);
         if (emailExists)
@@ -187,8 +188,8 @@ public class AuthController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(dto.Token) || string.IsNullOrWhiteSpace(dto.NewPassword))
             return BadRequest("Token and new password are required.");
-        if (dto.NewPassword.Length < 6)
-            return BadRequest("New password must be at least 6 characters.");
+        if (!PasswordPolicy.IsStrong(dto.NewPassword))
+            return BadRequest(PasswordPolicy.ErrorMessage);
 
         var hashedToken = HashToken(dto.Token);
 

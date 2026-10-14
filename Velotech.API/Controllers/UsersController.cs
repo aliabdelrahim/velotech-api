@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using Velotech.API.Data;
 using Velotech.API.Dtos;
 using Velotech.API.Models;
+using Velotech.API.Security;
 
 namespace Velotech.API.Controllers;
 
@@ -81,8 +82,8 @@ public class UsersController : ControllerBase
         {
             if (string.IsNullOrWhiteSpace(dto.CurrentPassword))
                 return BadRequest("Current password is required to set a new one.");
-            if (dto.NewPassword.Length < 6)
-                return BadRequest("New password must be at least 6 characters.");
+            if (!PasswordPolicy.IsStrong(dto.NewPassword))
+                return BadRequest(PasswordPolicy.ErrorMessage);
 
             if (string.IsNullOrWhiteSpace(user.PasswordHash) ||
                 !VerifyPassword(dto.CurrentPassword, user.PasswordHash))
@@ -204,8 +205,8 @@ public class UsersController : ControllerBase
         if (string.IsNullOrWhiteSpace(dto.Email))
             return BadRequest("L'email est requis.");
 
-        if (string.IsNullOrWhiteSpace(dto.Password) || dto.Password.Length < 6)
-            return BadRequest("Le mot de passe doit faire au moins 6 caracteres.");
+        if (!PasswordPolicy.IsStrong(dto.Password))
+            return BadRequest(PasswordPolicy.ErrorMessage);
 
         var emailExists = await _db.Users.AnyAsync(u => u.Email == dto.Email);
         if (emailExists)
@@ -291,8 +292,8 @@ public class UsersController : ControllerBase
         // Reset mot de passe optionnel (par admin, ex. user ayant perdu son mdp)
         if (!string.IsNullOrWhiteSpace(dto.NewPassword))
         {
-            if (dto.NewPassword.Length < 6)
-                return BadRequest("Le nouveau mot de passe doit faire au moins 6 caracteres.");
+            if (!PasswordPolicy.IsStrong(dto.NewPassword))
+                return BadRequest(PasswordPolicy.ErrorMessage);
             user.PasswordHash = HashPassword(dto.NewPassword);
         }
 

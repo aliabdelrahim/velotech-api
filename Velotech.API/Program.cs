@@ -116,6 +116,9 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<VelotechDbContext>();
     await DbSeeder.SeedAsync(db);
+    // Jeu de donnees de demonstration (une seule fois ; mots de passe hors du code)
+    await DemoDataSeeder.SeedAsync(db, app.Configuration, app.Environment,
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DemoData"));
 }
 
 // Swagger : toujours en dev ; en prod seulement si l'App Setting
